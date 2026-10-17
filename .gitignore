@@ -1,0 +1,50 @@
+# Xcode build products
+build/
+DerivedData/
+Build/
+
+# Xcode user-specific files
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+*.moved-aside
+*.hmap
+
+# Xcode workspace state
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+secrets/
+credentials/
+
+# Local build and installer artifacts
+dmg-staging/
+TradeCompanion.dmg
+*.dSYM/
+
+# Optional editor settings
+.idea/
+.vscode/

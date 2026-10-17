@@ -1,10 +1,3 @@
-//
-//  TradeCompanionApp.swift
-//  TradeCompanion
-//
-//  Created by Mart van der Zalm on 17/10/2026.
-//
-
 import SwiftUI
 
 @main
@@ -13,5 +6,7 @@ struct TradeCompanionApp: App {
         WindowGroup {
             ContentView()
         }
+        .defaultSize(width: 760, height: 560)
+        .windowResizability(.contentMinSize)
     }
 }
