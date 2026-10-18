@@ -5,6 +5,23 @@ import Testing
 struct TradeCalculatorTests {
     private let posix = Locale(identifier: "en_US_POSIX")
 
+    @Test func riskAmountFromBalanceAndPercentage() throws {
+        let input = TradeCalculationInput(
+            accountBalance: 5_600,
+            riskPercentage: Decimal(string: "0.5", locale: posix)!,
+            direction: .long,
+            entryPrice: 100,
+            stopLossPrice: 99,
+            takeProfitPrice: 102
+        )
+
+        let result = try TradeCalculator.calculate(input).get()
+        #expect(result.plannedRiskAmount == Decimal(28))
+        #expect(result.riskPercentage == Decimal(string: "0.5", locale: posix)!)
+        #expect(result.orderQuantity == Decimal(28))
+        #expect(result.riskReward == Decimal(2))
+    }
+
     @Test func longPositionUsesLinearSpotFormulas() throws {
         let input = TradeCalculationInput(
             accountBalance: 10_000,
@@ -12,19 +29,19 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: 100,
             stopLossPrice: 95,
-            riskRewardRatio: 2
+            takeProfitPrice: 110
         )
 
         let result = try TradeCalculator.calculate(input).get()
 
-        #expect(result.riskAmount == Decimal(100))
-        #expect(result.riskPercentage == Decimal(1))
+        #expect(result.plannedRiskAmount == Decimal(100))
         #expect(result.stopDistance == Decimal(5))
-        #expect(result.positionQuantity == Decimal(20))
+        #expect(result.orderQuantity == Decimal(20))
         #expect(result.orderValue == Decimal(2_000))
-        #expect(result.takeProfitPrice == Decimal(110))
         #expect(result.potentialLoss == Decimal(100))
         #expect(result.potentialProfit == Decimal(200))
+        #expect(result.riskReward == Decimal(2))
+        #expect(result.isExecutable)
     }
 
     @Test func shortPositionUsesLinearSpotFormulas() throws {
@@ -34,68 +51,15 @@ struct TradeCalculatorTests {
             direction: .short,
             entryPrice: 100,
             stopLossPrice: 105,
-            riskRewardRatio: 2
+            takeProfitPrice: 90
         )
 
         let result = try TradeCalculator.calculate(input).get()
 
-        #expect(result.riskAmount == Decimal(100))
-        #expect(result.riskPercentage == Decimal(1))
-        #expect(result.stopDistance == Decimal(5))
-        #expect(result.positionQuantity == Decimal(20))
+        #expect(result.orderQuantity == Decimal(20))
         #expect(result.orderValue == Decimal(2_000))
-        #expect(result.takeProfitPrice == Decimal(90))
-        #expect(result.potentialLoss == Decimal(100))
         #expect(result.potentialProfit == Decimal(200))
-    }
-
-    @Test func higherRiskPercentageScalesQuantity() throws {
-        let conservative = TradeCalculationInput(
-            accountBalance: 5_000,
-            riskPercentage: 0.5,
-            direction: .long,
-            entryPrice: 50,
-            stopLossPrice: 49,
-            riskRewardRatio: 1.5
-        )
-        let aggressive = TradeCalculationInput(
-            accountBalance: 5_000,
-            riskPercentage: 2,
-            direction: .long,
-            entryPrice: 50,
-            stopLossPrice: 49,
-            riskRewardRatio: 1.5
-        )
-
-        let conservativeResult = try TradeCalculator.calculate(conservative).get()
-        let aggressiveResult = try TradeCalculator.calculate(aggressive).get()
-
-        #expect(conservativeResult.riskAmount == Decimal(25))
-        #expect(conservativeResult.positionQuantity == Decimal(25))
-        #expect(conservativeResult.takeProfitPrice == dec("51.5"))
-        #expect(aggressiveResult.riskAmount == Decimal(100))
-        #expect(aggressiveResult.positionQuantity == Decimal(100))
-        #expect(aggressiveResult.orderValue == Decimal(5_000))
-        #expect(aggressiveResult.potentialProfit == Decimal(150))
-    }
-
-    @Test func fractionalPricesKeepFullPrecisionUntilDisplay() throws {
-        let input = TradeCalculationInput(
-            accountBalance: 1_000,
-            riskPercentage: 1,
-            direction: .long,
-            entryPrice: dec("1.2345"),
-            stopLossPrice: dec("1.2300"),
-            riskRewardRatio: dec("2.5")
-        )
-
-        let result = try TradeCalculator.calculate(input).get()
-
-        #expect(result.stopDistance == dec("0.0045"))
-        #expect(result.riskAmount == Decimal(10))
-        #expect(result.positionQuantity == dec("10") / dec("0.0045"))
-        #expect(result.takeProfitPrice == dec("1.24575"))
-        #expect(result.orderValue == result.positionQuantity * input.entryPrice)
+        #expect(result.riskReward == Decimal(2))
     }
 
     @Test func rejectsInvalidTradeConfigurations() {
@@ -105,7 +69,15 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: 100,
             stopLossPrice: 101,
-            riskRewardRatio: 2
+            takeProfitPrice: 110
+        )
+        let longTakeProfitBelowEntry = TradeCalculationInput(
+            accountBalance: 1_000,
+            riskPercentage: 1,
+            direction: .long,
+            entryPrice: 100,
+            stopLossPrice: 95,
+            takeProfitPrice: 90
         )
         let shortStopBelowEntry = TradeCalculationInput(
             accountBalance: 1_000,
@@ -113,7 +85,15 @@ struct TradeCalculatorTests {
             direction: .short,
             entryPrice: 100,
             stopLossPrice: 99,
-            riskRewardRatio: 2
+            takeProfitPrice: 90
+        )
+        let shortTakeProfitAboveEntry = TradeCalculationInput(
+            accountBalance: 1_000,
+            riskPercentage: 1,
+            direction: .short,
+            entryPrice: 100,
+            stopLossPrice: 105,
+            takeProfitPrice: 110
         )
         let equalPrices = TradeCalculationInput(
             accountBalance: 1_000,
@@ -121,11 +101,13 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: 100,
             stopLossPrice: 100,
-            riskRewardRatio: 2
+            takeProfitPrice: 110
         )
 
         #expect(TradeCalculator.calculate(longStopAboveEntry) == .failure(.stopLossMustBeBelowEntryForLong))
+        #expect(TradeCalculator.calculate(longTakeProfitBelowEntry) == .failure(.takeProfitMustBeAboveEntryForLong))
         #expect(TradeCalculator.calculate(shortStopBelowEntry) == .failure(.stopLossMustBeAboveEntryForShort))
+        #expect(TradeCalculator.calculate(shortTakeProfitAboveEntry) == .failure(.takeProfitMustBeBelowEntryForShort))
         #expect(TradeCalculator.calculate(equalPrices) == .failure(.stopLossMustDifferFromEntry))
     }
 
@@ -138,19 +120,7 @@ struct TradeCalculatorTests {
                     direction: .long,
                     entryPrice: 100,
                     stopLossPrice: 95,
-                    riskRewardRatio: 2
-                )
-            ) == .failure(.accountBalanceMustBePositive)
-        )
-        #expect(
-            TradeCalculator.calculate(
-                TradeCalculationInput(
-                    accountBalance: -1_000,
-                    riskPercentage: 1,
-                    direction: .long,
-                    entryPrice: 100,
-                    stopLossPrice: 95,
-                    riskRewardRatio: 2
+                    takeProfitPrice: 110
                 )
             ) == .failure(.accountBalanceMustBePositive)
         )
@@ -162,7 +132,7 @@ struct TradeCalculatorTests {
                     direction: .long,
                     entryPrice: 100,
                     stopLossPrice: 95,
-                    riskRewardRatio: 2
+                    takeProfitPrice: 110
                 )
             ) == .failure(.riskPercentageMustBePositive)
         )
@@ -174,7 +144,7 @@ struct TradeCalculatorTests {
                     direction: .long,
                     entryPrice: 0,
                     stopLossPrice: 95,
-                    riskRewardRatio: 2
+                    takeProfitPrice: 110
                 )
             ) == .failure(.entryPriceMustBePositive)
         )
@@ -186,7 +156,7 @@ struct TradeCalculatorTests {
                     direction: .long,
                     entryPrice: 100,
                     stopLossPrice: -5,
-                    riskRewardRatio: 2
+                    takeProfitPrice: 110
                 )
             ) == .failure(.stopLossPriceMustBePositive)
         )
@@ -198,9 +168,9 @@ struct TradeCalculatorTests {
                     direction: .long,
                     entryPrice: 100,
                     stopLossPrice: 95,
-                    riskRewardRatio: 0
+                    takeProfitPrice: 0
                 )
-            ) == .failure(.riskRewardRatioMustBePositive)
+            ) == .failure(.takeProfitPriceMustBePositive)
         )
     }
 
@@ -212,7 +182,7 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: "100",
             stopLossPrice: "95",
-            riskRewardRatio: "2"
+            takeProfitPrice: "110"
         )
         let invalid = TradeFormInput(
             accountBalance: "10000",
@@ -221,7 +191,7 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: "100",
             stopLossPrice: "95",
-            riskRewardRatio: "2"
+            takeProfitPrice: "110"
         )
         let valid = TradeFormInput(
             accountBalance: "10000",
@@ -230,14 +200,14 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: "100",
             stopLossPrice: "95",
-            riskRewardRatio: "2"
+            takeProfitPrice: "110"
         )
 
         #expect(TradeCalculator.parseAndCalculate(empty, locale: posix) == .failure(.missingValue))
         #expect(TradeCalculator.parseAndCalculate(invalid, locale: posix) == .failure(.invalidNumber))
 
         let parsedResult = try TradeCalculator.parseAndCalculate(valid, locale: posix).get()
-        #expect(parsedResult.positionQuantity == Decimal(20))
+        #expect(parsedResult.orderQuantity == Decimal(20))
     }
 
     @Test func fixedRiskAmountProducesEquivalentPosition() throws {
@@ -247,7 +217,7 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: 100,
             stopLossPrice: 95,
-            riskRewardRatio: 2
+            takeProfitPrice: 110
         )
         let fromAmount = TradeCalculationInput(
             accountBalance: 10_000,
@@ -255,48 +225,112 @@ struct TradeCalculatorTests {
             direction: .long,
             entryPrice: 100,
             stopLossPrice: 95,
-            riskRewardRatio: 2
+            takeProfitPrice: 110
         )
 
         let percentageResult = try TradeCalculator.calculate(fromPercentage).get()
         let amountResult = try TradeCalculator.calculate(fromAmount).get()
 
-        #expect(amountResult == percentageResult)
-        #expect(amountResult.riskAmount == Decimal(100))
-        #expect(amountResult.riskPercentage == Decimal(1))
+        #expect(amountResult.orderQuantity == percentageResult.orderQuantity)
+        #expect(amountResult.plannedRiskAmount == Decimal(100))
     }
 
-    @Test func rejectsNonPositiveRiskAmount() {
-        #expect(
-            TradeCalculator.calculate(
-                TradeCalculationInput(
-                    accountBalance: 1_000,
-                    risk: .amount(0),
-                    direction: .long,
-                    entryPrice: 100,
-                    stopLossPrice: 95,
-                    riskRewardRatio: 2
-                )
-            ) == .failure(.riskAmountMustBePositive)
+    @Test func roundsQuantityDownToExchangeIncrement() throws {
+        let constraints = linearConstraints(qtyStep: "0.001", minOrderQty: "0.001", minNotional: "5")
+        let input = TradeCalculationInput(
+            accountBalance: 1_000,
+            riskPercentage: 1,
+            direction: .long,
+            entryPrice: dec("100.00"),
+            stopLossPrice: dec("97.00"),
+            takeProfitPrice: dec("106.00"),
+            constraints: constraints
         )
+
+        let result = try TradeCalculator.calculate(input).get()
+        #expect(result.unroundedQuantity == dec("10") / dec("3"))
+        #expect(result.orderQuantity == dec("3.333"))
+        #expect(result.warnings.contains(.quantityRoundedDown))
+        #expect(result.warnings.contains(.estimatedRiskBelowPlanned))
+        #expect(result.potentialLoss < result.plannedRiskAmount)
     }
 
-    @Test func parseUsesAmountWhenRiskModeIsAmount() throws {
-        let form = TradeFormInput(
-            accountBalance: "8000",
-            riskMode: .amount,
-            riskValue: "80",
-            direction: .short,
-            entryPrice: "200",
-            stopLossPrice: "210",
-            riskRewardRatio: "1.5"
+    @Test func rejectsQuantityBelowExchangeMinimum() {
+        let constraints = linearConstraints(qtyStep: "0.1", minOrderQty: "0.1", minNotional: "5")
+        let input = TradeCalculationInput(
+            accountBalance: 10,
+            riskPercentage: 1,
+            direction: .long,
+            entryPrice: 100,
+            stopLossPrice: 98,
+            takeProfitPrice: 104,
+            constraints: constraints
         )
 
-        let result = try TradeCalculator.parseAndCalculate(form, locale: posix).get()
-        #expect(result.riskAmount == Decimal(80))
-        #expect(result.riskPercentage == Decimal(1))
-        #expect(result.positionQuantity == Decimal(8))
-        #expect(result.takeProfitPrice == Decimal(185))
+        #expect(TradeCalculator.calculate(input) == .failure(.quantityBelowMinimum))
+    }
+
+    @Test func rejectsUnsupportedInverseContract() {
+        var constraints = linearConstraints(qtyStep: "1", minOrderQty: "1", minNotional: "1")
+        constraints.contractType = "InversePerpetual"
+        constraints.quoteCoin = "USD"
+        constraints.settleCoin = "BTC"
+        let input = TradeCalculationInput(
+            accountBalance: 1_000,
+            riskPercentage: 1,
+            direction: .long,
+            entryPrice: 100,
+            stopLossPrice: 95,
+            takeProfitPrice: 110,
+            constraints: constraints
+        )
+        #expect(TradeCalculator.calculate(input) == .failure(.unsupportedContractType))
+    }
+
+    @Test func warnsWhenNotionalExceedsAvailableBalance() throws {
+        let input = TradeCalculationInput(
+            accountBalance: 10_000,
+            riskPercentage: 1,
+            direction: .long,
+            entryPrice: 100,
+            stopLossPrice: 95,
+            takeProfitPrice: 110,
+            availableBalance: 500
+        )
+        let result = try TradeCalculator.calculate(input).get()
+        #expect(result.orderValue == Decimal(2_000))
+        #expect(result.warnings.contains(.positionExceedsAvailableBalance))
+    }
+
+    @Test func rejectsNotionalBelowMinimum() {
+        let constraints = linearConstraints(qtyStep: "0.001", minOrderQty: "0.001", minNotional: "5000")
+        let input = TradeCalculationInput(
+            accountBalance: 100,
+            riskPercentage: 1,
+            direction: .long,
+            entryPrice: 100,
+            stopLossPrice: 99,
+            takeProfitPrice: 102,
+            constraints: constraints
+        )
+        #expect(TradeCalculator.calculate(input) == .failure(.notionalBelowMinimum))
+    }
+
+    private func linearConstraints(qtyStep: String, minOrderQty: String, minNotional: String) -> InstrumentConstraints {
+        InstrumentConstraints(
+            symbol: "BTCUSDT",
+            contractType: "LinearPerpetual",
+            status: "Trading",
+            baseCoin: "BTC",
+            quoteCoin: "USDT",
+            settleCoin: "USDT",
+            tickSize: dec("0.1"),
+            qtyStep: dec(qtyStep),
+            minOrderQty: dec(minOrderQty),
+            maxOrderQty: dec("100"),
+            maxMarketOrderQty: dec("100"),
+            minNotionalValue: dec(minNotional)
+        )
     }
 
     private func dec(_ string: String) -> Decimal {

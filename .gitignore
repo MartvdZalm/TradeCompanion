@@ -48,3 +48,6 @@ TradeCompanion.dmg
 # Optional editor settings
 .idea/
 .vscode/
+
+.postman/
+postman/

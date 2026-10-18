@@ -1,10 +1,17 @@
 import Foundation
 
 nonisolated enum TradeDirection: String, CaseIterable, Identifiable, Sendable {
-    case long = "Long"
-    case short = "Short"
+    case long = "LONG"
+    case short = "SHORT"
 
     var id: String { rawValue }
+
+    var bybitSide: String {
+        switch self {
+        case .long: return "Buy"
+        case .short: return "Sell"
+        }
+    }
 }
 
 nonisolated enum RiskMode: String, CaseIterable, Identifiable, Sendable {
@@ -12,6 +19,15 @@ nonisolated enum RiskMode: String, CaseIterable, Identifiable, Sendable {
     case amount = "Amount"
 
     var id: String { rawValue }
+}
+
+nonisolated enum OrderEntryType: String, CaseIterable, Identifiable, Sendable {
+    case limit = "Limit"
+    case market = "Market"
+
+    var id: String { rawValue }
+
+    var bybitOrderType: String { rawValue }
 }
 
 nonisolated enum RiskInput: Equatable, Sendable {
@@ -25,7 +41,9 @@ nonisolated struct TradeCalculationInput: Equatable, Sendable {
     var direction: TradeDirection
     var entryPrice: Decimal
     var stopLossPrice: Decimal
-    var riskRewardRatio: Decimal
+    var takeProfitPrice: Decimal
+    var constraints: InstrumentConstraints?
+    var availableBalance: Decimal?
 
     init(
         accountBalance: Decimal,
@@ -33,14 +51,18 @@ nonisolated struct TradeCalculationInput: Equatable, Sendable {
         direction: TradeDirection,
         entryPrice: Decimal,
         stopLossPrice: Decimal,
-        riskRewardRatio: Decimal
+        takeProfitPrice: Decimal,
+        constraints: InstrumentConstraints? = nil,
+        availableBalance: Decimal? = nil
     ) {
         self.accountBalance = accountBalance
         self.risk = risk
         self.direction = direction
         self.entryPrice = entryPrice
         self.stopLossPrice = stopLossPrice
-        self.riskRewardRatio = riskRewardRatio
+        self.takeProfitPrice = takeProfitPrice
+        self.constraints = constraints
+        self.availableBalance = availableBalance
     }
 
     init(
@@ -49,7 +71,9 @@ nonisolated struct TradeCalculationInput: Equatable, Sendable {
         direction: TradeDirection,
         entryPrice: Decimal,
         stopLossPrice: Decimal,
-        riskRewardRatio: Decimal
+        takeProfitPrice: Decimal,
+        constraints: InstrumentConstraints? = nil,
+        availableBalance: Decimal? = nil
     ) {
         self.init(
             accountBalance: accountBalance,
@@ -57,27 +81,40 @@ nonisolated struct TradeCalculationInput: Equatable, Sendable {
             direction: direction,
             entryPrice: entryPrice,
             stopLossPrice: stopLossPrice,
-            riskRewardRatio: riskRewardRatio
+            takeProfitPrice: takeProfitPrice,
+            constraints: constraints,
+            availableBalance: availableBalance
         )
     }
 }
 
+nonisolated enum TradeWarning: Equatable, Sendable {
+    case quantityRoundedDown
+    case estimatedRiskBelowPlanned
+    case positionExceedsAvailableBalance
+}
+
 nonisolated struct TradeCalculationResult: Equatable, Sendable {
-    /// Planned monetary risk, not realized loss.
-    var riskAmount: Decimal
-    /// Planned risk as a percentage of account balance.
+    /// Planned monetary risk from the account settings, before quantity rounding.
+    var plannedRiskAmount: Decimal
+    /// Planned risk as a percentage of the account balance.
     var riskPercentage: Decimal
     /// Absolute price distance between entry and stop-loss.
     var stopDistance: Decimal
-    /// Linear spot-style quantity: risk amount ÷ stop distance.
-    var positionQuantity: Decimal
-    /// Quantity × entry price. This is not margin.
+    /// Risk-to-reward ratio based on the entry, stop-loss, and take-profit prices.
+    var riskReward: Decimal
+    /// Quantity calculated from the planned risk, before exchange rounding.
+    var unroundedQuantity: Decimal
+    /// Quantity after rounding down to the instrument's increment, if applicable.
+    var orderQuantity: Decimal
+    /// Order quantity × entry price (notional value).
     var orderValue: Decimal
-    var takeProfitPrice: Decimal
-    /// Quantity × stop distance. Estimate before fees and slippage.
+    /// Potential loss based on order quantity × stop distance, before fees and slippage.
     var potentialLoss: Decimal
-    /// Quantity × (stop distance × risk-to-reward). Estimate before fees and slippage.
+    /// Potential profit based on order quantity × take-profit distance, before fees and slippage.
     var potentialProfit: Decimal
+    var warnings: [TradeWarning]
+    var isExecutable: Bool
 }
 
 nonisolated enum TradeCalculationError: Equatable, Error, Sendable {
@@ -88,10 +125,18 @@ nonisolated enum TradeCalculationError: Equatable, Error, Sendable {
     case riskAmountMustBePositive
     case entryPriceMustBePositive
     case stopLossPriceMustBePositive
-    case riskRewardRatioMustBePositive
+    case takeProfitPriceMustBePositive
     case stopLossMustBeBelowEntryForLong
     case stopLossMustBeAboveEntryForShort
+    case takeProfitMustBeAboveEntryForLong
+    case takeProfitMustBeBelowEntryForShort
     case stopLossMustDifferFromEntry
+    case takeProfitMustDifferFromEntry
+    case unsupportedContractType
+    case quantityBelowMinimum
+    case quantityAboveMaximum
+    case notionalBelowMinimum
+    case exitNotionalBelowMinimum
 }
 
 extension TradeCalculationError {
@@ -111,14 +156,30 @@ extension TradeCalculationError {
             return "Entry price must be greater than zero."
         case .stopLossPriceMustBePositive:
             return "Stop-loss price must be greater than zero."
-        case .riskRewardRatioMustBePositive:
-            return "Risk-to-reward ratio must be greater than zero."
+        case .takeProfitPriceMustBePositive:
+            return "Take-profit price must be greater than zero."
         case .stopLossMustBeBelowEntryForLong:
-            return "For a long trade, stop-loss must be below the entry price."
+            return "For a LONG trade, stop-loss must be below the entry price."
         case .stopLossMustBeAboveEntryForShort:
-            return "For a short trade, stop-loss must be above the entry price."
+            return "For a SHORT trade, stop-loss must be above the entry price."
+        case .takeProfitMustBeAboveEntryForLong:
+            return "For a LONG trade, take-profit must be above the entry price."
+        case .takeProfitMustBeBelowEntryForShort:
+            return "For a SHORT trade, take-profit must be below the entry price."
         case .stopLossMustDifferFromEntry:
             return "Stop-loss must be different from the entry price."
+        case .takeProfitMustDifferFromEntry:
+            return "Take-profit must be different from the entry price."
+        case .unsupportedContractType:
+            return "This instrument is not a tradable spot pair right now."
+        case .quantityBelowMinimum:
+            return "The risk-based quantity is below the exchange minimum order size after rounding down."
+        case .quantityAboveMaximum:
+            return "The calculated quantity exceeds the exchange maximum order size."
+        case .notionalBelowMinimum:
+            return "The order value is below the exchange minimum order amount."
+        case .exitNotionalBelowMinimum:
+            return "The stop-loss or take-profit order would be below the exchange minimum order amount at its trigger price. Use a wider risk or a larger size."
         }
     }
 }
@@ -130,5 +191,5 @@ nonisolated struct TradeFormInput: Equatable, Sendable {
     var direction: TradeDirection
     var entryPrice: String
     var stopLossPrice: String
-    var riskRewardRatio: String
+    var takeProfitPrice: String
 }

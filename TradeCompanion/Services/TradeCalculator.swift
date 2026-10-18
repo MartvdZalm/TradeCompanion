@@ -6,7 +6,7 @@ nonisolated enum TradeCalculator {
             return .failure(.accountBalanceMustBePositive)
         }
 
-        let riskAmount: Decimal
+        let plannedRiskAmount: Decimal
         let riskPercentage: Decimal
         switch input.risk {
         case .percentage(let percentage):
@@ -14,12 +14,12 @@ nonisolated enum TradeCalculator {
                 return .failure(.riskPercentageMustBePositive)
             }
             riskPercentage = percentage
-            riskAmount = input.accountBalance * percentage / 100
+            plannedRiskAmount = input.accountBalance * percentage / 100
         case .amount(let amount):
             guard amount > 0 else {
                 return .failure(.riskAmountMustBePositive)
             }
-            riskAmount = amount
+            plannedRiskAmount = amount
             riskPercentage = amount / input.accountBalance * 100
         }
 
@@ -29,8 +29,8 @@ nonisolated enum TradeCalculator {
         guard input.stopLossPrice > 0 else {
             return .failure(.stopLossPriceMustBePositive)
         }
-        guard input.riskRewardRatio > 0 else {
-            return .failure(.riskRewardRatioMustBePositive)
+        guard input.takeProfitPrice > 0 else {
+            return .failure(.takeProfitPriceMustBePositive)
         }
 
         switch input.direction {
@@ -40,14 +40,30 @@ nonisolated enum TradeCalculator {
                     ? .stopLossMustDifferFromEntry
                     : .stopLossMustBeBelowEntryForLong
             )
+        case .long where input.takeProfitPrice <= input.entryPrice:
+            return .failure(
+                input.takeProfitPrice == input.entryPrice
+                    ? .takeProfitMustDifferFromEntry
+                    : .takeProfitMustBeAboveEntryForLong
+            )
         case .short where input.stopLossPrice <= input.entryPrice:
             return .failure(
                 input.stopLossPrice == input.entryPrice
                     ? .stopLossMustDifferFromEntry
                     : .stopLossMustBeAboveEntryForShort
             )
+        case .short where input.takeProfitPrice >= input.entryPrice:
+            return .failure(
+                input.takeProfitPrice == input.entryPrice
+                    ? .takeProfitMustDifferFromEntry
+                    : .takeProfitMustBeBelowEntryForShort
+            )
         default:
             break
+        }
+
+        if let constraints = input.constraints, !constraints.supportsPlannerFormulas {
+            return .failure(.unsupportedContractType)
         }
 
         let stopDistance = abs(input.entryPrice - input.stopLossPrice)
@@ -55,37 +71,82 @@ nonisolated enum TradeCalculator {
             return .failure(.stopLossMustDifferFromEntry)
         }
 
-        let positionQuantity = riskAmount / stopDistance
-        let orderValue = positionQuantity * input.entryPrice
-        let potentialLoss = positionQuantity * stopDistance
-        let potentialProfit = potentialLoss * input.riskRewardRatio
-        let takeProfitPrice: Decimal
-        switch input.direction {
-        case .long:
-            takeProfitPrice = input.entryPrice + stopDistance * input.riskRewardRatio
-        case .short:
-            takeProfitPrice = input.entryPrice - stopDistance * input.riskRewardRatio
+        let takeProfitDistance = abs(input.takeProfitPrice - input.entryPrice)
+        guard takeProfitDistance > 0 else {
+            return .failure(.takeProfitMustDifferFromEntry)
+        }
+
+        let riskReward = takeProfitDistance / stopDistance
+        let unroundedQuantity = plannedRiskAmount / stopDistance
+
+        var warnings: [TradeWarning] = []
+        var orderQuantity = unroundedQuantity
+
+        if let constraints = input.constraints {
+            orderQuantity = ExchangeDecimal.roundDown(unroundedQuantity, toIncrement: constraints.qtyStep)
+            if orderQuantity != unroundedQuantity {
+                warnings.append(.quantityRoundedDown)
+            }
+            if orderQuantity < constraints.minOrderQty {
+                return .failure(.quantityBelowMinimum)
+            }
+            if orderQuantity > constraints.maxOrderQty {
+                return .failure(.quantityAboveMaximum)
+            }
+            if constraints.minNotionalValue > 0 {
+                let notional = orderQuantity * input.entryPrice
+                if notional < constraints.minNotionalValue {
+                    return .failure(.notionalBelowMinimum)
+                }
+                // SL and TP are separate orders with their own minimum quantity, calculated based on their trigger prices.
+                let lowestExitPrice = min(input.stopLossPrice, input.takeProfitPrice)
+                if orderQuantity * lowestExitPrice < constraints.minNotionalValue {
+                    return .failure(.exitNotionalBelowMinimum)
+                }
+            }
+        }
+
+        let orderValue = orderQuantity * input.entryPrice
+        let potentialLoss = orderQuantity * stopDistance
+        let potentialProfit = orderQuantity * takeProfitDistance
+
+        if potentialLoss < plannedRiskAmount {
+            warnings.append(.estimatedRiskBelowPlanned)
+        }
+
+        if let available = input.availableBalance, available > 0, orderValue > available {
+            warnings.append(.positionExceedsAvailableBalance)
         }
 
         return .success(
             TradeCalculationResult(
-                riskAmount: riskAmount,
+                plannedRiskAmount: plannedRiskAmount,
                 riskPercentage: riskPercentage,
                 stopDistance: stopDistance,
-                positionQuantity: positionQuantity,
+                riskReward: riskReward,
+                unroundedQuantity: unroundedQuantity,
+                orderQuantity: orderQuantity,
                 orderValue: orderValue,
-                takeProfitPrice: takeProfitPrice,
                 potentialLoss: potentialLoss,
-                potentialProfit: potentialProfit
+                potentialProfit: potentialProfit,
+                warnings: warnings,
+                isExecutable: true
             )
         )
     }
 
     static func parseAndCalculate(
         _ form: TradeFormInput,
+        constraints: InstrumentConstraints? = nil,
+        availableBalance: Decimal? = nil,
         locale: Locale = .current
     ) -> Result<TradeCalculationResult, TradeCalculationError> {
-        parse(form, locale: locale).flatMap(calculate)
+        parse(form, locale: locale).flatMap { parsed in
+            var input = parsed
+            input.constraints = constraints
+            input.availableBalance = availableBalance
+            return calculate(input)
+        }
     }
 
     static func parse(
@@ -97,7 +158,7 @@ nonisolated enum TradeCalculator {
             form.riskValue,
             form.entryPrice,
             form.stopLossPrice,
-            form.riskRewardRatio
+            form.takeProfitPrice
         ]
 
         if fields.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
@@ -109,7 +170,7 @@ nonisolated enum TradeCalculator {
             let riskValue = decimal(from: form.riskValue, locale: locale),
             let entryPrice = decimal(from: form.entryPrice, locale: locale),
             let stopLossPrice = decimal(from: form.stopLossPrice, locale: locale),
-            let riskRewardRatio = decimal(from: form.riskRewardRatio, locale: locale)
+            let takeProfitPrice = decimal(from: form.takeProfitPrice, locale: locale)
         else {
             return .failure(.invalidNumber)
         }
@@ -129,7 +190,7 @@ nonisolated enum TradeCalculator {
                 direction: form.direction,
                 entryPrice: entryPrice,
                 stopLossPrice: stopLossPrice,
-                riskRewardRatio: riskRewardRatio
+                takeProfitPrice: takeProfitPrice
             )
         )
     }
@@ -147,8 +208,6 @@ nonisolated enum TradeCalculator {
             return number as Decimal
         }
 
-        // Fall back to POSIX parsing so values typed with a period still work
-        // in locales that use a comma as the decimal separator.
         return Decimal(string: trimmed, locale: Locale(identifier: "en_US_POSIX"))
     }
 }

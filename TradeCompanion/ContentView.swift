@@ -1,11 +1,13 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Bindable var model: TradePlannerViewModel
+
     var body: some View {
-        CalculatorView()
+        TradePlannerView(model: model)
     }
 }
 
 #Preview {
-    ContentView()
+    ContentView(model: TradePlannerViewModel())
 }
